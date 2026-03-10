@@ -263,7 +263,7 @@ async fn store(
     let mut id: Uuid = Uuid::nil();
     while id == Uuid::nil() {
         let new_id = Uuid::new_v4();
-        if storage.contains_sync(&new_id) {
+        if storage.contains_async(&new_id).await {
             continue;
         }
         id = new_id;
