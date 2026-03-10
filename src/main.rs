@@ -3,6 +3,8 @@ use actix_web::{
     rt::{self, spawn, time::Instant},
     web::{self, Bytes, Data},
 };
+
+const INDEX_HTML: &str = include_str!("index.html");
 use aes_gcm::{
     Aes256Gcm, Key, Nonce,
     aead::{Aead, AeadCore, KeyInit, OsRng},
@@ -135,12 +137,35 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(owned_storage.clone())
+            .service(index)
+            .service(info)
             .service(store)
             .service(take)
     })
     .bind(bind)?
     .run()
     .await
+}
+
+/// `GET /` — serves the upload UI.
+#[get("/")]
+async fn index() -> impl Responder {
+    HttpResponse::Ok()
+        .content_type("text/html; charset=utf-8")
+        .body(INDEX_HTML)
+}
+
+/// `GET /info` — returns relevant server limits as JSON.
+#[get("/info")]
+async fn info() -> impl Responder {
+    let config = Config::try_parse().unwrap_or_default();
+    let body = serde_json::json!({
+        "max_age_secs": config.max_age_secs,
+        "max_object_size": config.max_object_size,
+    });
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .body(body.to_string())
 }
 
 /// `PUT /store` — encrypts the request body with a fresh AES-256-GCM key and stores it.
