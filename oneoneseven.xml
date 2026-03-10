@@ -1,0 +1,93 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>oneoneseven</Name>
+  <Repository>oneoneseven</Repository>
+  <Registry/>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Overview>Ephemeral encrypted one-time object store. Objects are encrypted with AES-256-GCM, retrievable exactly once via a secret URL, and automatically expire.</Overview>
+  <WebUI>http://[IP]:[PORT:8420]/</WebUI>
+  <ExtraParams/>
+  <PostArgs/>
+
+  <Config Name="Web UI Port"
+          Target="8420"
+          Default="8420"
+          Mode="tcp"
+          Description="Port the web UI and API are served on."
+          Type="Port"
+          Display="always"
+          Required="true"
+          Mask="false"/>
+
+  <Config Name="Listen Address"
+          Target="LISTEN"
+          Default="0.0.0.0:8420"
+          Mode=""
+          Description="Address and port the server binds to inside the container. Must match the container port above."
+          Type="Variable"
+          Display="advanced"
+          Required="false"
+          Mask="false">0.0.0.0:8420</Config>
+
+  <Config Name="Max Object Size (bytes)"
+          Target="MAX_OBJECT_SIZE"
+          Default="1000000"
+          Mode=""
+          Description="Maximum size in bytes of a single stored object."
+          Type="Variable"
+          Display="always"
+          Required="false"
+          Mask="false">1000000</Config>
+
+  <Config Name="Max Objects"
+          Target="MAX_OBJECTS"
+          Default="256"
+          Mode=""
+          Description="Maximum number of objects that may be held in storage at once."
+          Type="Variable"
+          Display="always"
+          Required="false"
+          Mask="false">256</Config>
+
+  <Config Name="Max Concurrent Requests"
+          Target="MAX_SLOTS"
+          Default="10"
+          Mode=""
+          Description="Maximum number of concurrent requests allowed at any moment."
+          Type="Variable"
+          Display="advanced"
+          Required="false"
+          Mask="false">10</Config>
+
+  <Config Name="Max Object Age (seconds)"
+          Target="MAX_AGE_SECS"
+          Default="3600"
+          Mode=""
+          Description="Maximum age of a stored object in seconds before it is pruned. Default is 3600 (1 hour)."
+          Type="Variable"
+          Display="always"
+          Required="false"
+          Mask="false">3600</Config>
+
+  <Config Name="Pruner Interval (seconds)"
+          Target="PRUNE_SECS"
+          Default="60"
+          Mode=""
+          Description="Interval in seconds between pruner runs."
+          Type="Variable"
+          Display="advanced"
+          Required="false"
+          Mask="false">60</Config>
+
+  <Config Name="Log Level"
+          Target="RUST_LOG"
+          Default="info"
+          Mode=""
+          Description="Log verbosity. Options: error, warn, info, debug, trace."
+          Type="Variable"
+          Display="always"
+          Required="false"
+          Mask="false">info</Config>
+</Container>

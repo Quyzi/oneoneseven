@@ -36,27 +36,27 @@ const MAX_DUMMY_OBJECT_SIZE: usize = 1_000_000;
 #[command(version, about, long_about = None)]
 struct Config {
     /// Address and port to listen on (e.g. `127.0.0.1:8420`).
-    #[arg(short = 'L', long, default_value_t = Self::default().listen)]
+    #[arg(short = 'L', long, env = "LISTEN", default_value_t = Self::default().listen)]
     listen: String,
 
     /// Maximum size in bytes of a single stored object.
-    #[arg(short = 'o', long, default_value_t = Self::default().max_object_size)]
+    #[arg(short = 'o', long, env = "MAX_OBJECT_SIZE", default_value_t = Self::default().max_object_size)]
     max_object_size: u64,
 
     /// Maximum number of objects that may be held in storage at once.
-    #[arg(short = 'm', long, default_value_t = Self::default().max_objects)]
+    #[arg(short = 'm', long, env = "MAX_OBJECTS", default_value_t = Self::default().max_objects)]
     max_objects: u64,
 
     /// Maximum number of concurrent requests allowed at any moment.
-    #[arg(short = 's', long, default_value_t = Self::default().max_slots)]
+    #[arg(short = 's', long, env = "MAX_SLOTS", default_value_t = Self::default().max_slots)]
     max_slots: usize,
 
     /// Maximum age of a stored object in seconds before it is pruned.
-    #[arg(short = 'a', long, default_value_t = Self::default().max_age_secs)]
+    #[arg(short = 'a', long, env = "MAX_AGE_SECS", default_value_t = Self::default().max_age_secs)]
     max_age_secs: u64,
 
     /// Interval in seconds between pruner runs.
-    #[arg(short = 'p', long, default_value_t = Self::default().prune_secs)]
+    #[arg(short = 'p', long, env = "PRUNE_SECS", default_value_t = Self::default().prune_secs)]
     prune_secs: u64,
 }
 
