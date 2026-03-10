@@ -125,9 +125,9 @@
     <button id="submit-btn" onclick="upload()">store</button>
 
     <div id="result">
-      <div class="result-label">token (click to copy)</div>
+      <div class="result-label">retrieval URL (click to copy)</div>
       <div class="token" id="token-display" onclick="copyToken()"></div>
-      <div class="copy-hint">share this to let someone retrieve the object once</div>
+      <div class="copy-hint">share this URL to let someone retrieve the object once · this URL will not be shown again</div>
     </div>
 
     <div id="error"></div>
@@ -177,7 +177,7 @@
         }
 
         const token = await resp.text();
-        tokenEl.textContent = token;
+        tokenEl.textContent = `${window.location.origin}/take/${token}`;
         result.style.display = 'block';
         textEl.value = '';
         fileEl.value = '';
@@ -191,8 +191,8 @@
     }
 
     function copyToken() {
-      const text = document.getElementById('token-display').textContent;
-      navigator.clipboard.writeText(text).catch(() => {});
+      const url = document.getElementById('token-display').textContent;
+      navigator.clipboard.writeText(url).catch(() => {});
     }
 
     function formatDuration(secs) {
