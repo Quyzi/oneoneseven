@@ -158,8 +158,10 @@ async fn main() -> std::io::Result<()> {
         }
     });
 
+    let max_object_size = config.max_object_size as usize;
     HttpServer::new(move || {
         App::new()
+            .app_data(web::PayloadConfig::new(max_object_size))
             .app_data(owned_storage.clone())
             .app_data(metrics_handle.clone())
             .service(index)
