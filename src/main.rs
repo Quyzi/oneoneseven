@@ -3,12 +3,16 @@ use actix_web::{
     rt::{self, spawn, time::Instant},
     web::{self, Bytes, Data},
 };
+
+const INDEX_HTML: &str = include_str!("index.html");
 use aes_gcm::{
     Aes256Gcm, Key, Nonce,
     aead::{Aead, AeadCore, KeyInit, OsRng},
 };
 use async_lock::Semaphore;
 use clap::Parser;
+use metrics::{counter, gauge};
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use rand::{RngExt, seq::IteratorRandom};
 use scc::HashMap;
 use serde::{Deserialize, Serialize};
@@ -32,27 +36,27 @@ const MAX_DUMMY_OBJECT_SIZE: usize = 1_000_000;
 #[command(version, about, long_about = None)]
 struct Config {
     /// Address and port to listen on (e.g. `127.0.0.1:8420`).
-    #[arg(short, long, default_value_t = Self::default().listen)]
+    #[arg(short = 'L', long, env = "LISTEN", default_value_t = Self::default().listen)]
     listen: String,
 
     /// Maximum size in bytes of a single stored object.
-    #[arg(short = 'o', long, default_value_t = Self::default().max_object_size)]
+    #[arg(short = 'o', long, env = "MAX_OBJECT_SIZE", default_value_t = Self::default().max_object_size)]
     max_object_size: u64,
 
     /// Maximum number of objects that may be held in storage at once.
-    #[arg(short = 'm', long, default_value_t = Self::default().max_objects)]
+    #[arg(short = 'm', long, env = "MAX_OBJECTS", default_value_t = Self::default().max_objects)]
     max_objects: u64,
 
     /// Maximum number of concurrent requests allowed at any moment.
-    #[arg(short = 's', long, default_value_t = Self::default().max_slots)]
+    #[arg(short = 's', long, env = "MAX_SLOTS", default_value_t = Self::default().max_slots)]
     max_slots: usize,
 
     /// Maximum age of a stored object in seconds before it is pruned.
-    #[arg(short = 'a', long, default_value_t = Self::default().max_age_secs)]
+    #[arg(short = 'a', long, env = "MAX_AGE_SECS", default_value_t = Self::default().max_age_secs)]
     max_age_secs: u64,
 
     /// Interval in seconds between pruner runs.
-    #[arg(short = 'p', long, default_value_t = Self::default().prune_secs)]
+    #[arg(short = 'p', long, env = "PRUNE_SECS", default_value_t = Self::default().prune_secs)]
     prune_secs: u64,
 }
 
@@ -103,10 +107,17 @@ fn generate_dummy_object() -> Bytes {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    let config = Config::parse();
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
-    let config = Config::parse();
+
+    let metrics_handle = PrometheusBuilder::new()
+        .install_recorder()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    let metrics_handle = Data::new(metrics_handle);
+
     let bind = config
         .listen
         .parse::<SocketAddr>()
@@ -117,9 +128,12 @@ async fn main() -> std::io::Result<()> {
 
     // Start a pruner thread to periodically wipe out old entries
     let pruner_storage = owned_storage.clone();
+    let pruner_handle = metrics_handle.clone();
     spawn(async move {
         let config = Config::parse();
         let storage = pruner_storage;
+        let metrics_handle = pruner_handle;
+
         let ticker = rt::time::interval(Duration::from_secs(config.prune_secs));
         rt::pin!(ticker);
         ticker.tick().await; // first tick is instant
@@ -128,19 +142,66 @@ async fn main() -> std::io::Result<()> {
             storage
                 .retain_async(|_id, object| !object.is_too_old(config.max_age_secs))
                 .await;
+
+            counter!("pruner_runs").increment(1);
+            metrics_handle.run_upkeep();
             tracing::debug!("Pruner done did a prune");
         }
     });
 
+    let metrics_storage = owned_storage.clone();
+    spawn(async move {
+        let storage = metrics_storage;
+        loop {
+            rt::time::sleep(Duration::from_secs(1)).await;
+            gauge!("objects_stored_current").set(storage.len() as f64);
+        }
+    });
+
+    let max_object_size = config.max_object_size as usize;
     HttpServer::new(move || {
         App::new()
+            .app_data(web::PayloadConfig::new(max_object_size))
             .app_data(owned_storage.clone())
+            .app_data(metrics_handle.clone())
+            .service(index)
+            .service(info)
             .service(store)
             .service(take)
+            .service(render_metrics)
     })
     .bind(bind)?
     .run()
     .await
+}
+
+/// `GET /` — serves the upload UI.
+#[get("/")]
+async fn index() -> impl Responder {
+    counter!("requests_total", "route" => "/").increment(1);
+    HttpResponse::Ok()
+        .content_type("text/html; charset=utf-8")
+        .body(INDEX_HTML)
+}
+
+/// `GET /info` — returns relevant server limits as JSON.
+#[get("/info")]
+async fn info() -> impl Responder {
+    counter!("requests_total", "route" => "/info").increment(1);
+    let config = Config::try_parse().unwrap_or_default();
+    let body = serde_json::json!({
+        "max_age_secs": config.max_age_secs,
+        "max_object_size": config.max_object_size,
+    });
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .body(body.to_string())
+}
+
+#[get("/metrics")]
+async fn render_metrics(metrics: Data<PrometheusHandle>) -> impl Responder {
+    counter!("requests_total", "route" => "/metrics").increment(1);
+    HttpResponse::Ok().body(metrics.render())
 }
 
 /// `PUT /store` — encrypts the request body with a fresh AES-256-GCM key and stores it.
@@ -148,7 +209,8 @@ async fn main() -> std::io::Result<()> {
 /// Returns `200 OK` with `{id}:{key_hex}` as a plain-text body on success, where `key_hex`
 /// is the 64-character hex-encoded 256-bit key needed to retrieve and decrypt the object.
 /// Returns `429 Too Many Requests` when the concurrency limit is reached,
-/// `400 Bad Request` when the body exceeds `max_object_size` or storage is full,
+/// `400 Bad Request` when the body exceeds `max_object_size`, `507 Insufficient Storage`
+/// when storage is full,
 /// and `500 Internal Server Error` on unexpected failures.
 #[put("/store")]
 async fn store(
@@ -156,15 +218,19 @@ async fn store(
     bytes: Bytes,
     storage: web::Data<HashMap<Uuid, StoredObject>>,
 ) -> impl Responder {
+    counter!("requests_total", "route" => "/store").increment(1);
     let config = Config::try_parse().unwrap_or_default();
     let Some(_permit) = LIMITER.try_acquire() else {
+        counter!("responses_total", "route" => "/store", "status" => "429").increment(1);
         return HttpResponse::TooManyRequests().body("Slow down cowboy");
     };
     if bytes.len() > config.max_object_size as usize {
+        counter!("responses_total", "route" => "/store", "status" => "400").increment(1);
         return HttpResponse::BadRequest().body("Too big");
     }
-    if storage.len().saturating_sub(1) > config.max_objects as usize {
-        return HttpResponse::BadRequest().body("At capacity");
+    if storage.len() >= config.max_objects as usize {
+        counter!("responses_total", "route" => "/store", "status" => "507").increment(1);
+        return HttpResponse::InsufficientStorage().body("Too many");
     }
     let content_type = req
         .headers()
@@ -182,6 +248,7 @@ async fn store(
     let cipher = Aes256Gcm::new(&key);
     let nonce = Aes256Gcm::generate_nonce(OsRng);
     let Ok(ciphertext) = cipher.encrypt(&nonce, bytes.as_ref()) else {
+        counter!("responses_total", "route" => "/store", "status" => "500").increment(1);
         return HttpResponse::InternalServerError().body("Oops");
     };
 
@@ -196,7 +263,7 @@ async fn store(
     let mut id: Uuid = Uuid::nil();
     while id == Uuid::nil() {
         let new_id = Uuid::new_v4();
-        if storage.contains_sync(&new_id) {
+        if storage.contains_async(&new_id).await {
             continue;
         }
         id = new_id;
@@ -204,9 +271,13 @@ async fn store(
     }
 
     if storage.insert_async(id, object).await.is_err() {
+        counter!("responses_total", "route" => "/store", "status" => "500").increment(1);
         return HttpResponse::InternalServerError().body("Oops");
     }
 
+    counter!("bytes_stored").increment(bytes.len() as u64);
+    counter!("objects_stored").increment(1);
+    counter!("responses_total", "route" => "/store", "status" => "200").increment(1);
     HttpResponse::Ok().body(format!("{}/{}", id, hex::encode(key)))
 }
 
@@ -224,7 +295,9 @@ async fn take(
     path: web::Path<(String, String)>,
     storage: web::Data<HashMap<Uuid, StoredObject>>,
 ) -> impl Responder {
+    counter!("requests_total", "route" => "/take").increment(1);
     let Some(_permit) = LIMITER.try_acquire() else {
+        counter!("responses_total", "route" => "/take", "status" => "429").increment(1);
         return HttpResponse::TooManyRequests().body("Slow down cowboy");
     };
     let (id_str, key_str) = path.into_inner();
@@ -236,12 +309,18 @@ async fn take(
     let dummy = generate_dummy_object();
 
     let Ok(id) = Uuid::from_str(&id_str) else {
+        counter!("responses_total", "route" => "/take", "status" => "200").increment(1);
+        counter!("bytes_taken").increment(dummy.len() as u64);
         return HttpResponse::Ok().content_type("text/plain").body(dummy);
     };
 
     let key_bytes = match hex::decode(&key_str) {
         Ok(b) if b.len() == 32 => b,
-        _ => return HttpResponse::Ok().content_type("text/plain").body(dummy),
+        _ => {
+            counter!("responses_total", "route" => "/take", "status" => "200").increment(1);
+            counter!("bytes_taken").increment(dummy.len() as u64);
+            return HttpResponse::Ok().content_type("text/plain").body(dummy);
+        }
     };
 
     // Decrypt while holding a read guard before committing to removal, so a
@@ -257,10 +336,15 @@ async fn take(
         .await;
 
     let Some(Some((content_type, plaintext))) = result else {
+        counter!("responses_total", "route" => "/take", "status" => "200").increment(1);
+        counter!("bytes_taken").increment(dummy.len() as u64);
         return HttpResponse::Ok().content_type("text/plain").body(dummy);
     };
 
     storage.remove_async(&id).await;
+    counter!("responses_total", "route" => "/take", "status" => "200").increment(1);
+    counter!("bytes_taken").increment(plaintext.len() as u64);
+    counter!("objects_taken").increment(1);
     HttpResponse::Ok()
         .content_type(content_type)
         .body(plaintext)

@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>117</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: monospace;
+      background: #111;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .card {
+      width: 100%;
+      max-width: 540px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    h1 { font-size: 1.1rem; color: #aaa; letter-spacing: 0.1em; }
+    label { font-size: 0.8rem; color: #888; }
+    textarea {
+      width: 100%;
+      height: 140px;
+      resize: vertical;
+      background: #111;
+      color: #e0e0e0;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 0.6rem;
+      font-family: monospace;
+      font-size: 0.9rem;
+    }
+    textarea:focus { outline: none; border-color: #555; }
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      color: #444;
+      font-size: 0.75rem;
+    }
+    .divider::before, .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: #333;
+    }
+    input[type="file"] {
+      width: 100%;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 0.5rem;
+      font-family: monospace;
+      font-size: 0.85rem;
+      color: #888;
+      cursor: pointer;
+    }
+    input[type="file"]:focus { outline: none; border-color: #555; }
+    button {
+      background: #2a2a2a;
+      color: #ccc;
+      border: 1px solid #444;
+      border-radius: 4px;
+      padding: 0.6rem 1.2rem;
+      font-family: monospace;
+      font-size: 0.9rem;
+      cursor: pointer;
+      align-self: flex-start;
+    }
+    button:hover { background: #333; color: #fff; border-color: #666; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    #result {
+      display: none;
+      background: #0d1a0d;
+      border: 1px solid #2a4a2a;
+      border-radius: 4px;
+      padding: 0.75rem;
+    }
+    #result .result-label { font-size: 0.75rem; color: #5a9a5a; margin-bottom: 0.4rem; }
+    #result .token {
+      word-break: break-all;
+      font-size: 0.85rem;
+      color: #8fbc8f;
+      cursor: pointer;
+      user-select: all;
+    }
+    #result .copy-hint { font-size: 0.7rem; color: #555; margin-top: 0.4rem; }
+    #limits { font-size: 0.72rem; color: #444; border-top: 1px solid #252525; padding-top: 0.75rem; }
+    #error {
+      display: none;
+      background: #1a0d0d;
+      border: 1px solid #4a2a2a;
+      border-radius: 4px;
+      padding: 0.75rem;
+      font-size: 0.85rem;
+      color: #bc6f6f;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div>
+      <label for="text-input">text</label>
+      <textarea id="text-input" placeholder="paste something here…"></textarea>
+    </div>
+
+    <div class="divider">or</div>
+
+    <div>
+      <label for="file-input">file</label>
+      <input type="file" id="file-input">
+    </div>
+
+    <button id="submit-btn" onclick="upload()">store</button>
+
+    <div id="result">
+      <div class="result-label">retrieval URL (click to copy)</div>
+      <div class="token" id="token-display" onclick="copyToken()"></div>
+      <div class="copy-hint">share this URL to let someone retrieve the object once · this URL will not be shown again</div>
+    </div>
+
+    <div id="error"></div>
+
+    <div id="limits"></div>
+  </div>
+
+  <script>
+    async function upload() {
+      const textEl = document.getElementById('text-input');
+      const fileEl = document.getElementById('file-input');
+      const btn    = document.getElementById('submit-btn');
+      const result = document.getElementById('result');
+      const errEl  = document.getElementById('error');
+      const tokenEl = document.getElementById('token-display');
+
+      result.style.display = 'none';
+      errEl.style.display  = 'none';
+
+      let body, contentType;
+
+      if (fileEl.files.length > 0) {
+        body = fileEl.files[0];
+        contentType = body.type || 'application/octet-stream';
+      } else if (textEl.value.trim() !== '') {
+        body = textEl.value;
+        contentType = 'text/plain; charset=utf-8';
+      } else {
+        errEl.textContent = 'nothing to store — enter text or pick a file';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'storing…';
+
+      try {
+        const resp = await fetch('/store', {
+          method: 'PUT',
+          headers: { 'Content-Type': contentType },
+          body,
+        });
+
+        if (!resp.ok) {
+          const msg = await resp.text();
+          throw new Error(`${resp.status}: ${msg}`);
+        }
+
+        const token = await resp.text();
+        tokenEl.textContent = `${window.location.origin}/take/${token}`;
+        result.style.display = 'block';
+        textEl.value = '';
+        fileEl.value = '';
+      } catch (e) {
+        errEl.textContent = e.message;
+        errEl.style.display = 'block';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'store';
+      }
+    }
+
+    function copyToken() {
+      const url = document.getElementById('token-display').textContent;
+      navigator.clipboard.writeText(url).catch(() => {});
+    }
+
+    function formatDuration(secs) {
+      if (secs % 3600 === 0) return `${secs / 3600}h`;
+      if (secs % 60   === 0) return `${secs / 60}m`;
+      return `${secs}s`;
+    }
+
+    fetch('/info')
+      .then(r => r.json())
+      .then(({ max_age_secs, max_object_size }) => {
+        document.getElementById('limits').textContent =
+          `max upload ${max_object_size.toLocaleString()} bytes · objects expire after ${formatDuration(max_age_secs)} and are not persisted across restarts`;
+      })
+      .catch(() => {});
+  </script>
+</body>
+</html>
