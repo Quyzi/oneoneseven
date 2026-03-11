@@ -206,12 +206,15 @@ async fn render_metrics(metrics: Data<PrometheusHandle>) -> impl Responder {
 
 /// `PUT /store` — encrypts the request body with a fresh AES-256-GCM key and stores it.
 ///
-/// Returns `200 OK` with `{id}:{key_hex}` as a plain-text body on success, where `key_hex`
-/// is the 64-character hex-encoded 256-bit key needed to retrieve and decrypt the object.
+/// The key is generated fresh per request and is never persisted server-side; only the
+/// ciphertext and nonce are stored. The caller receives both in the response and must
+/// keep them to retrieve the object.
+///
+/// Returns `200 OK` with `{id}/{key_hex}` as plain text on success, where `key_hex` is
+/// the 64-character hex-encoded 256-bit AES key needed to retrieve and decrypt the object.
 /// Returns `429 Too Many Requests` when the concurrency limit is reached,
 /// `400 Bad Request` when the body exceeds `max_object_size`, `507 Insufficient Storage`
-/// when storage is full,
-/// and `500 Internal Server Error` on unexpected failures.
+/// when storage is full, and `500 Internal Server Error` on unexpected failures.
 #[put("/store")]
 async fn store(
     req: HttpRequest,
@@ -281,13 +284,15 @@ async fn store(
     HttpResponse::Ok().body(format!("{}/{}", id, hex::encode(key)))
 }
 
-/// `GET /take/{id}/{key}` — removes, decrypts, and returns the stored object.
+/// `GET /take/{id}/{key}` — decrypts, wipes, and returns the stored object exactly once.
 ///
 /// `key` must be the 64-character hex-encoded AES-256 key returned by `PUT /store`.
-/// On a cache hit with a valid key the decrypted bytes and original `Content-Type` are returned.
-/// On a cache miss, an invalid id, an invalid key, or a decryption failure a random dummy
-/// payload is returned with `Content-Type: text/plain`, making all failure modes
-/// indistinguishable to observers.
+/// On a hit with a valid key: the ciphertext is decrypted, the stored bytes are overwritten
+/// with random data before the entry is removed, and the plaintext is returned with the
+/// original `Content-Type`. The object cannot be retrieved again after a successful take.
+/// On a miss (wrong key, already consumed, expired, or invalid id) a random dummy payload
+/// is returned with `Content-Type: text/plain`. All failure modes are indistinguishable
+/// to observers by design.
 /// Returns `429 Too Many Requests` when the concurrency limit is reached.
 #[get("/take/{id}/{key}")]
 async fn take(
@@ -341,6 +346,13 @@ async fn take(
         return HttpResponse::Ok().content_type("text/plain").body(dummy);
     };
 
+    storage
+        .update_async(&id, |_, obj| {
+            let mut rng = rand::rng();
+            let len = obj.bytes.len();
+            obj.bytes = Bytes::from((0..len).map(|_| rng.random::<u8>()).collect::<Vec<u8>>());
+        })
+        .await;
     storage.remove_async(&id).await;
     counter!("responses_total", "route" => "/take", "status" => "200").increment(1);
     counter!("bytes_taken").increment(plaintext.len() as u64);

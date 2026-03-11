@@ -1,6 +1,6 @@
 # oneoneseven
 
-Ephemeral encrypted one-time object store. Upload text or a file, get back a secret URL. The URL works exactly once - after retrieval the object is gone. All objects are encrypted at rest with AES-256-GCM; the key is never stored server-side.
+Ephemeral encrypted one-time object store. Upload text or a file, get back a secret URL. The URL works exactly once - on retrieval the stored ciphertext is overwritten with random bytes before being removed, then the plaintext is returned to the caller. All objects are encrypted at rest with AES-256-GCM; the key is never stored server-side.
 
 ## Usage
 
@@ -22,7 +22,7 @@ Returns `200 OK` with `{uuid}/{hex-key}` as plain text on success.
 ```
 GET /take/{uuid}/{hex-key}
 ```
-Returns the original bytes with the original `Content-Type` on a hit. On a miss (wrong key, already consumed, expired, or bogus ID) returns a random dummy payload - all failure modes are indistinguishable by design.
+On a hit, the stored ciphertext is overwritten with random bytes before removal, then the original bytes are returned with the original `Content-Type`. The object cannot be retrieved again. On a miss (wrong key, already consumed, expired, or bogus ID) a random dummy payload is returned - all failure modes are indistinguishable by design.
 
 ## Configuration
 
